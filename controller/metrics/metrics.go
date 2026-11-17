@@ -43,6 +43,7 @@ type MetricsServer struct {
 	redisRequestHistogram             *prometheus.HistogramVec
 	resourceEventsProcessingHistogram *prometheus.HistogramVec
 	resourceEventsNumberGauge         *prometheus.GaugeVec
+	k8sClientRateLimiterEnabledGauge  prometheus.Gauge
 	registry                          *prometheus.Registry
 	hostname                          string
 	cron                              *cron.Cron
@@ -122,6 +123,11 @@ var (
 		Name: "argocd_kubectl_exec_pending",
 		Help: "Number of pending kubectl executions",
 	}, []string{"hostname", "command"})
+
+	k8sClientRateLimiterEnabledGauge = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "argocd_controller_k8s_client_ratelimiter_enabled",
+		Help: "Whether the client-side Kubernetes API rate limiter is enabled (1) or disabled (0).",
+	})
 
 	reconcileHistogram = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
@@ -244,6 +250,7 @@ func NewMetricsServer(addr string, appLister applister.ApplicationLister, appFil
 	registry.MustRegister(redisRequestHistogram)
 	registry.MustRegister(resourceEventsProcessingHistogram)
 	registry.MustRegister(resourceEventsNumberGauge)
+	registry.MustRegister(k8sClientRateLimiterEnabledGauge)
 
 	kubectl.RegisterWithClientGo()
 	kubectl.RegisterWithPrometheus(registry)
@@ -266,6 +273,7 @@ func NewMetricsServer(addr string, appLister applister.ApplicationLister, appFil
 		redisRequestHistogram:             redisRequestHistogram,
 		resourceEventsProcessingHistogram: resourceEventsProcessingHistogram,
 		resourceEventsNumberGauge:         resourceEventsNumberGauge,
+		k8sClientRateLimiterEnabledGauge:  k8sClientRateLimiterEnabledGauge,
 		hostname:                          hostname,
 		// This cron is used to expire the metrics cache.
 		// Currently clearing the metrics cache is logging and deleting from the map
@@ -348,6 +356,16 @@ func (m *MetricsServer) IncKubernetesRequest(app *argoappv1.Application, server,
 
 func (m *MetricsServer) IncRedisRequest(command string, failed bool) {
 	m.redisRequestCounter.WithLabelValues(m.hostname, common.CommandApplicationController, command, strconv.FormatBool(failed)).Inc()
+}
+
+// SetK8sClientRateLimiterEnabled records whether the client-side Kubernetes API
+// rate limiter is currently enabled, so the state can be observed and alerted on.
+func (m *MetricsServer) SetK8sClientRateLimiterEnabled(enabled bool) {
+	value := float64(0)
+	if enabled {
+		value = 1
+	}
+	m.k8sClientRateLimiterEnabledGauge.Set(value)
 }
 
 // ObserveRedisRequestDuration observes redis request duration

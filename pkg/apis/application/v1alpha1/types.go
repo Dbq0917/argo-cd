@@ -48,6 +48,7 @@ import (
 	"github.com/argoproj/argo-cd/v3/util/rbac"
 
 	"github.com/argoproj/argo-cd/v3/common"
+	"github.com/argoproj/argo-cd/v3/pkg/ratelimiter"
 	"github.com/argoproj/argo-cd/v3/util/env"
 	"github.com/argoproj/argo-cd/v3/util/helm"
 	utilhttp "github.com/argoproj/argo-cd/v3/util/http"
@@ -4501,6 +4502,12 @@ func (c *Cluster) rawRestConfig() (*rest.Config, error) {
 	config.DisableCompression = c.Config.DisableCompression
 	config.Timeout = 0
 	config.QPS, config.Burst = resolveRateLimits(c.Config)
+	// Install a runtime-toggleable client-side rate limiter. While enabled it
+	// enforces exactly the resolved QPS/Burst token bucket (identical to the
+	// limiter client-go would create from config.QPS/config.Burst); while
+	// disabled it imposes no client-side throttling. The toggle is process-wide
+	// and takes effect without recreating REST clients.
+	config.RateLimiter = ratelimiter.NewDynamicClientRateLimiter(config.QPS, config.Burst)
 	return config, nil
 }
 

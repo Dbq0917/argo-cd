@@ -711,6 +711,66 @@ backoff = time.Since(lastRequeueTime) >= WORKQUEUE_FAILURE_COOLDOWN_NS ?
 backoff = WORKQUEUE_BASE_DELAY_NS
 ```
 
+## Disabling Client-Side Kubernetes API Rate Limiting
+
+Every Kubernetes REST client built by the application controller carries a client-side token bucket
+rate limiter. Its size comes from the cluster secret (`qps`/`burst` in the cluster configuration) or,
+when unset, from the global defaults `controller.k8s.client.qps` (default `50`) and
+`controller.k8s.client.burst` (default `100`) in `argocd-cmd-params-cm`. This limiter throttles API
+requests on the client side, on top of any server-side (platform) rate limiting such as
+[API Priority and Fairness](https://kubernetes.io/docs/concepts/cluster-administration/flow-control/).
+
+If your platform already enforces a unified server-side rate limiting policy, the two limiters stack
+and large syncs can be throttled by the client-side bucket long before the server-side policy applies.
+Raising the QPS/Burst values only moves the client-side ceiling; to fully disable client-side
+throttling, set the following key in `argocd-cm`:
+
+```yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: argocd-cm
+data:
+  controller.k8s.client.ratelimiter.enabled: "false"
+```
+
+Behavior:
+
+* The change takes effect at runtime — the application controller watches `argocd-cm` and applies the
+  toggle without a restart. Rollback is setting the key back to `"true"` (or removing it), which also
+  applies at runtime, so recovery from a misconfiguration takes effect within seconds.
+* When the key is absent or set to any value other than `"false"`, behavior is identical to previous
+  releases: the same per-cluster QPS/Burst token bucket is enforced.
+* Disabling only removes client-side request throttling. It does **not** affect retries or timeouts:
+  client-go still retries failed requests (up to 10 attempts) and honors the server-provided
+  `Retry-After` header on HTTP 429 responses, so when the platform-side limiter rejects a request, the
+  client backs off for the suggested duration instead of retrying immediately. The workqueue per-item
+  backoff described above also stays in place, so a failing application is still requeued with
+  exponential backoff.
+* The following minimal client-side protections remain active even when the limiter is disabled:
+  * `--kubectl-parallelism-limit` (default `20`) caps concurrent cluster operations during a sync.
+  * The workqueue per-item backoff caps how fast a single failing application is retried.
+
+Observability and audit:
+
+* Every enable/disable transition is logged by the application controller with an `AUDIT:` prefixed
+  log line, including the previous and new state.
+* The gauge `argocd_controller_k8s_client_ratelimiter_enabled` (1 = enabled, 0 = disabled) exposes the
+  current state and can be used for dashboards and alerts.
+* To verify that request pacing is governed by the platform after disabling, watch
+  `argocd_app_k8s_request_total`: the request rate should rise to the platform-side limit and
+  `response_code="429"` responses should appear only when the platform-side policy engages, each
+  followed by a `Retry-After` backoff rather than a retry storm.
+
+Suggested rollout:
+
+1. Roll out the change with the key left at its default (`"true"`); behavior is unchanged.
+2. Disable the limiter (`"false"`) during a low-traffic window and run a representative bulk sync.
+   Confirm via `argocd_app_k8s_request_total` that throughput now tracks the platform-side limit and
+   that 429 responses are followed by `Retry-After` backoff.
+3. If anything looks wrong, set the key back to `"true"` — the previous behavior is restored at
+   runtime within seconds, without a controller restart.
+
 ## Rate Limiting ApplicationSet Reconciliations
 
 The `argocd-applicationset-controller` also exposes workqueue rate limiter flags, using the same two-layer model

@@ -3130,6 +3130,42 @@ func Test_getDexAuthConnectorID(t *testing.T) {
 	}
 }
 
+func Test_updateSettingsFromConfigMap_ControllerK8sClientRateLimiterEnabled(t *testing.T) {
+	tests := []struct {
+		name     string
+		cmData   map[string]string
+		expected bool
+	}{
+		{
+			name:     "defaults to enabled when key is absent",
+			cmData:   map[string]string{},
+			expected: true,
+		},
+		{
+			name:     "enabled when key is true",
+			cmData:   map[string]string{ControllerK8sClientRateLimiterEnabledKey: "true"},
+			expected: true,
+		},
+		{
+			name:     "disabled only when key is false",
+			cmData:   map[string]string{ControllerK8sClientRateLimiterEnabledKey: "false"},
+			expected: false,
+		},
+		{
+			name:     "unrecognized values keep the limiter enabled",
+			cmData:   map[string]string{ControllerK8sClientRateLimiterEnabledKey: "disabled"},
+			expected: true,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			settings := &ArgoCDSettings{}
+			updateSettingsFromConfigMap(settings, &corev1.ConfigMap{Data: tc.cmData})
+			assert.Equal(t, tc.expected, settings.ControllerK8sClientRateLimiterEnabled)
+		})
+	}
+}
+
 func Test_updateSettingsFromConfigMap_DexAuthConnectorID(t *testing.T) {
 	tests := []struct {
 		name                string

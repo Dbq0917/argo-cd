@@ -178,6 +178,11 @@ type ArgoCDSettings struct {
 	// RequireOverridePrivilegeForRevisionSync indicates whether giving an external revision during sync is considered an override.
 	// Up to revision 3.2, this was always false. It is now still false by default, in order to not breaking existing usage.
 	RequireOverridePrivilegeForRevisionSync bool `json:"requireOverridePrivilegeForRevisionSync"`
+	// ControllerK8sClientRateLimiterEnabled indicates whether the application controller enforces the
+	// client-side Kubernetes API rate limiter (per-cluster QPS/Burst). Defaults to true. When set to
+	// false, client-side throttling is disabled at runtime and request pacing is left to server-side
+	// (platform) rate limiting. Retries and timeouts are unaffected.
+	ControllerK8sClientRateLimiterEnabled bool `json:"controllerK8sClientRateLimiterEnabled"`
 }
 
 type GoogleAnalytics struct {
@@ -602,6 +607,10 @@ const (
 	impersonationEnforcedKey = "application.sync.impersonation.enforced"
 	// requireOverridePrivilegeForRevisionSyncKey is the key to configure whether giving an external revision during sync is considered an override
 	requireOverridePrivilegeForRevisionSyncKey = "application.sync.requireOverridePrivilegeForRevisionSync"
+	// ControllerK8sClientRateLimiterEnabledKey is the key to configure whether the application controller
+	// enforces the client-side Kubernetes API rate limiter. Defaults to true; only the literal value
+	// "false" disables it.
+	ControllerK8sClientRateLimiterEnabledKey = "controller.k8s.client.ratelimiter.enabled"
 )
 
 const (
@@ -1822,6 +1831,7 @@ func updateSettingsFromConfigMap(settings *ArgoCDSettings, argoCDCM *corev1.Conf
 	settings.ExtensionConfig = getExtensionConfigs(argoCDCM.Data)
 	settings.ImpersonationEnabled = argoCDCM.Data[impersonationEnabledKey] == "true"
 	settings.RequireOverridePrivilegeForRevisionSync = argoCDCM.Data[requireOverridePrivilegeForRevisionSyncKey] == "true"
+	settings.ControllerK8sClientRateLimiterEnabled = argoCDCM.Data[ControllerK8sClientRateLimiterEnabledKey] != "false"
 }
 
 func getExtensionConfigs(cmData map[string]string) map[string]string {

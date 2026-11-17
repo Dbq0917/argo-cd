@@ -403,6 +403,18 @@ data:
   # be between 3 and 4 minutes. Disabled when the value is 0, defaults to 1 minute.
   timeout.reconciliation.jitter: 60s
 
+  # Controls whether the application controller enforces the client-side Kubernetes API
+  # rate limiter (the per-cluster QPS/Burst token bucket configured via
+  # controller.k8s.client.qps / controller.k8s.client.burst in argocd-cmd-params-cm or the
+  # cluster secret). Defaults to "true", which preserves the historical behavior.
+  # Set to "false" to fully disable client-side throttling and let server-side (platform)
+  # rate limiting, e.g. API Priority and Fairness, pace requests instead. The change takes
+  # effect at runtime without restarting the controller, and every transition is audit
+  # logged. Retries (including honoring the server-provided Retry-After header on HTTP 429
+  # responses) and timeouts are unaffected. When disabled, the kubectl parallelism limit
+  # and the workqueue per-item backoff remain in place as minimal client-side protection.
+  controller.k8s.client.ratelimiter.enabled: "true"
+
   # webhook.refresh.jitter is the maximum jitter duration that can be added to the webhook-triggered application refresh.
   # When multiple webhook events are received simultaneously (e.g., after a bulk merge), this jitter helps spread out the
   # refresh load over time to prevent spikes in the repo-server component. The jitter is a random delay between 0 and the

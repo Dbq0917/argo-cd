@@ -20,6 +20,7 @@ import (
 	commitclient "github.com/argoproj/argo-cd/v3/commitserver/apiclient"
 	"github.com/argoproj/argo-cd/v3/common"
 	"github.com/argoproj/argo-cd/v3/controller"
+	controllermetrics "github.com/argoproj/argo-cd/v3/controller/metrics"
 	"github.com/argoproj/argo-cd/v3/controller/sharding"
 	"github.com/argoproj/argo-cd/v3/pkg/apis/application/v1alpha1"
 	appclientset "github.com/argoproj/argo-cd/v3/pkg/client/clientset/versioned"
@@ -239,6 +240,30 @@ func NewCommand() *cobra.Command {
 				hydratorEnabled,
 			)
 			errors.CheckError(err)
+			// Apply the client-side Kubernetes API rate limiter toggle from argocd-cm and
+			// watch for runtime updates, so the limiter can be disabled without a restart.
+			// Rollback is setting the key back to "true" (or removing it), which also
+			// takes effect at runtime.
+			if currentSettings, err := settingsMgr.GetSettings(); err != nil {
+				log.Warnf("Unable to read settings, keeping client-side Kubernetes API rate limiter state unchanged: %v", err)
+				appController.GetMetricsServer().SetK8sClientRateLimiterEnabled(ratelimiter.ClientRateLimiterEnabled())
+			} else {
+				applyK8sClientRateLimiterSetting(currentSettings.ControllerK8sClientRateLimiterEnabled, appController.GetMetricsServer())
+				log.Infof("Client-side Kubernetes API rate limiter is %s (argocd-cm key %q)", enabledString(currentSettings.ControllerK8sClientRateLimiterEnabled), settings.ControllerK8sClientRateLimiterEnabledKey)
+			}
+			settingsUpdateCh := make(chan *settings.ArgoCDSettings, 1)
+			settingsMgr.Subscribe(settingsUpdateCh)
+			go func() {
+				defer settingsMgr.Unsubscribe(settingsUpdateCh)
+				for {
+					select {
+					case <-ctx.Done():
+						return
+					case newSettings := <-settingsUpdateCh:
+						applyK8sClientRateLimiterSetting(newSettings.ControllerK8sClientRateLimiterEnabled, appController.GetMetricsServer())
+					}
+				}
+			}()
 			cacheutil.CollectMetrics(redisClient, appController.GetMetricsServer(), nil)
 
 			stats.RegisterStackDumper()
@@ -341,4 +366,20 @@ func NewCommand() *cobra.Command {
 	})
 	reconciledAtCacheSource = cacheutil.AddCacheFlagsToCmd(&command, cacheutil.Options{FlagPrefix: "reconciled-at-"})
 	return &command
+}
+
+// applyK8sClientRateLimiterSetting applies the client-side Kubernetes API rate
+// limiter toggle from argocd-cm. The change takes effect at runtime for all
+// REST clients built by this process, and every state transition is audit
+// logged by the ratelimiter package.
+func applyK8sClientRateLimiterSetting(enabled bool, metricsServer *controllermetrics.MetricsServer) {
+	ratelimiter.SetClientRateLimiterEnabled(enabled)
+	metricsServer.SetK8sClientRateLimiterEnabled(enabled)
+}
+
+func enabledString(enabled bool) string {
+	if enabled {
+		return "enabled"
+	}
+	return "disabled"
 }

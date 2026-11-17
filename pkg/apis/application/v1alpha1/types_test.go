@@ -24,6 +24,7 @@ import (
 	"k8s.io/client-go/rest"
 
 	argocdcommon "github.com/argoproj/argo-cd/v3/common"
+	"github.com/argoproj/argo-cd/v3/pkg/ratelimiter"
 	utilhttp "github.com/argoproj/argo-cd/v3/util/http"
 )
 
@@ -7605,6 +7606,37 @@ func TestCluster_RESTConfig_QPSAndBurst(t *testing.T) {
 			assert.InDelta(t, tt.expectedQPS, restConfig.QPS, 0.0001)
 			assert.Equal(t, tt.expectedBurst, restConfig.Burst)
 		})
+	}
+}
+
+func TestCluster_RESTConfig_DynamicRateLimiter(t *testing.T) {
+	previous := ratelimiter.ClientRateLimiterEnabled()
+	t.Cleanup(func() {
+		ratelimiter.SetClientRateLimiterEnabled(previous)
+	})
+
+	cluster := &Cluster{
+		Server: "https://kubernetes.example",
+		Config: ClusterConfig{QPS: 10, Burst: 20},
+	}
+
+	config, err := cluster.RESTConfig()
+	require.NoError(t, err)
+	require.NotNil(t, config.RateLimiter, "RESTConfig must install the runtime-toggleable rate limiter")
+	defer config.RateLimiter.Stop()
+
+	// Enabled: throttles according to the resolved QPS/Burst.
+	ratelimiter.SetClientRateLimiterEnabled(true)
+	assert.InDelta(t, 10, config.RateLimiter.QPS(), 0.0001)
+	for range 20 {
+		require.True(t, config.RateLimiter.TryAccept())
+	}
+	assert.False(t, config.RateLimiter.TryAccept())
+
+	// Disabled at runtime: the same REST config imposes no client-side throttling.
+	ratelimiter.SetClientRateLimiterEnabled(false)
+	for range 1000 {
+		require.True(t, config.RateLimiter.TryAccept())
 	}
 }
 
